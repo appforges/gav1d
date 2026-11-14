@@ -1,0 +1,535 @@
+package av1
+
+import (
+	"strconv"
+	"strings"
+	"testing"
+)
+
+const (
+	fgTestW      = 84
+	fgTestH      = 70
+	fgTestStride = 128
+)
+
+func fgGen(iter, kind, i int) uint16 {
+	v := uint32(i)*2654435761 + uint32(kind)*2246822519 + uint32(iter)*3266489917
+	v ^= v >> 15
+	v *= 2654435761
+
+	return uint16(v >> 16)
+}
+
+func fgFillPoints(points [][2]uint8, maxN, iter, kind int) int {
+	n := int(fgGen(iter, kind, 0)) % (maxN + 1)
+	x := int(fgGen(iter, kind, 1)) % 16
+	for i := range n {
+		if x > 255 {
+			return i
+		}
+		points[i][0] = uint8(x)
+		points[i][1] = uint8(fgGen(iter, kind, 2+i*2))
+		x += 1 + int(fgGen(iter, kind, 3+i*2))%24
+	}
+
+	return n
+}
+
+func fgFillData(iter, monochrome, ssHor, ssVer int) filmGrainData {
+	var d filmGrainData
+
+	d.seed = uint32(fgGen(iter, 1, 0))
+	d.numYPoints = fgFillPoints(d.yPoints[:], 14, iter, 2)
+
+	if monochrome == 0 {
+		d.chromaScalingFromLuma = b2i(fgGen(iter, 3, 0)%4 == 0)
+	}
+
+	if monochrome != 0 || d.chromaScalingFromLuma != 0 ||
+		(ssVer == 1 && ssHor == 1 && d.numYPoints == 0) {
+		d.numUvPoints[0], d.numUvPoints[1] = 0, 0
+	} else {
+		for pl := range 2 {
+			d.numUvPoints[pl] = fgFillPoints(d.uvPoints[pl][:], 10, iter, 4+pl)
+		}
+		if ssHor == 1 && ssVer == 1 &&
+			(d.numUvPoints[0] != 0) != (d.numUvPoints[1] != 0) {
+			d.numUvPoints[0], d.numUvPoints[1] = 0, 0
+		}
+	}
+
+	d.scalingShift = 8 + int(fgGen(iter, 6, 0))%4
+	d.arCoeffLag = int(fgGen(iter, 7, 0)) % 4
+
+	numYPos := 2 * d.arCoeffLag * (d.arCoeffLag + 1)
+	if d.numYPoints != 0 {
+		for i := range numYPos {
+			d.arCoeffsY[i] = int8(int(fgGen(iter, 8, i)&0xff) - 128)
+		}
+	}
+
+	for pl := range 2 {
+		if d.numUvPoints[pl] == 0 && d.chromaScalingFromLuma == 0 {
+			continue
+		}
+		numUvPos := numYPos + b2i(d.numYPoints != 0)
+		for i := range numUvPos {
+			d.arCoeffsUv[pl][i] = int8(int(fgGen(iter, 9+pl, i)&0xff) - 128)
+		}
+		if d.numYPoints == 0 {
+			d.arCoeffsUv[pl][numUvPos] = 0
+		}
+	}
+
+	d.arCoeffShift = uint64(6 + fgGen(iter, 11, 0)%4)
+	d.grainScaleShift = int(fgGen(iter, 12, 0)) % 4
+
+	for pl := range 2 {
+		if d.numUvPoints[pl] == 0 {
+			continue
+		}
+		d.uvMult[pl] = int(fgGen(iter, 13, pl)&0xff) - 128
+		d.uvLumaMult[pl] = int(fgGen(iter, 14, pl)&0xff) - 128
+		d.uvOffset[pl] = int(fgGen(iter, 15, pl)&0x1ff) - 256
+	}
+
+	d.overlapFlag = b2i(fgGen(iter, 16, 0)%4 != 0)
+	d.clipToRestrictedRange = b2i(fgGen(iter, 17, 0)%4 == 0)
+
+	return d
+}
+
+type fgResult struct {
+	scaling [3][]uint8
+	lut     [3]grainLut
+	planes  [3][]int
+}
+
+func runFilmGrain[P pixel](iter, bpc, layout, w, h int, isID bool) fgResult {
+	ssVer := b2i(layout == pixelLayoutI420)
+	ssHor := b2i(layout != pixelLayoutI444)
+	monochrome := b2i(layout == pixelLayoutI400)
+	nplanes := 3
+	if monochrome != 0 {
+		nplanes = 1
+	}
+	cw, ch := (w+ssHor)>>ssHor, (h+ssVer)>>ssVer
+
+	data := fgFillData(iter, monochrome, ssHor, ssVer)
+
+	var src, dst [3][]P
+	stride := [3]int{fgTestStride, fgTestStride, fgTestStride}
+	bitdepthMax := 1<<bpc - 1
+	for pl := range nplanes {
+		src[pl] = make([]P, fgTestStride*fgTestH)
+		dst[pl] = make([]P, fgTestStride*fgTestH)
+		ph := h
+		if pl != 0 {
+			ph = ch
+		}
+		for y := range ph {
+			for x := range fgTestStride {
+				i := y*fgTestStride + x
+				src[pl][i] = P(int(fgGen(iter, 20+pl, i)) & bitdepthMax)
+			}
+		}
+	}
+
+	var fg filmGrainCtx
+	goDsp := newDspGo[P]()
+	prepGrain(&fg, &data, layout, bpc, w, h, &dst, &src, &stride)
+	for row := range (h + fgBlockSize - 1) / fgBlockSize {
+		applyGrainRow(goDsp, &fg, &data, layout, bpc, w, h, isID, &dst, &src, &stride, row)
+	}
+
+	res := fgResult{scaling: fg.scaling, lut: fg.lut}
+	for pl := range nplanes {
+		pw, ph := w, h
+		if pl != 0 {
+			pw, ph = cw, ch
+		}
+		out := make([]int, 0, pw*ph)
+		for y := range ph {
+			for x := range pw {
+				out = append(out, int(dst[pl][y*fgTestStride+x]))
+			}
+		}
+		res.planes[pl] = out
+	}
+
+	return res
+}
+
+// TestFilmGrainAsm checks the architecture-specific noise row against the pure
+// Go one. The whole destination is compared, so a kernel that runs past the end
+// of the row fails.
+func TestFilmGrainAsm(t *testing.T) {
+	d := newDsp[uint8]()
+	scaling := make([]uint8, 256+4)[:256]
+	for i := range scaling {
+		scaling[i] = uint8(cdefGen(7, 3, i))
+	}
+
+	cases := 0
+
+	for iter := range 6 {
+		src := make([]uint8, 64)
+		for i := range src {
+			src[i] = uint8(cdefGen(iter, 0, i))
+		}
+		grain := make([]int16, 64)
+		for i := range grain {
+			grain[i] = int16(cdefGen(iter, 1, i)&255) - 128
+		}
+
+		for _, n := range []int{16, 17, 23, 30, 31, 32, 33, 48} {
+			for shift := 8; shift <= 11; shift++ {
+				for _, lim := range [2][2]int{{0, 255}, {16, 235}} {
+					ref := make([]uint8, 64)
+					got := make([]uint8, 64)
+					fgApplyRow(ref, 4, src, 2, scaling, grain, n, shift, lim[0], lim[1])
+					d.fgApplyRow(got, 4, src, 2, scaling, grain, n, shift, lim[0], lim[1])
+
+					for i := range ref {
+						if got[i] == ref[i] {
+							continue
+						}
+						t.Fatalf("n=%d shift=%d clip=%v: dst[%d] = %d, want %d",
+							n, shift, lim, i, got[i], ref[i])
+					}
+					cases++
+				}
+			}
+		}
+	}
+
+	t.Logf("%d cases", cases)
+}
+
+// TestFilmGrain16Asm checks the same row at high bit depth, where the scaling
+// table is indexed by the whole sample and the product no longer fits a word.
+func TestFilmGrain16Asm(t *testing.T) {
+	d := newDsp[uint16]()
+	cases := 0
+
+	for _, bpc := range []int{10, 12} {
+		size := 1 << bpc
+		scaling := make([]uint8, size+4)[:size]
+		for i := range scaling {
+			scaling[i] = uint8(cdefGen(7, 3, i))
+		}
+		pixMax := int(1<<bpc - 1)
+
+		for iter := range 6 {
+			src := make([]uint16, 64)
+			for i := range src {
+				src[i] = uint16(int(cdefGen(iter, 0, i)) & pixMax)
+			}
+			grain := make([]int16, 64)
+			for i := range grain {
+				grain[i] = int16(cdefGen(iter, 1, i)&2047) - 1024
+			}
+
+			for _, n := range []int{16, 17, 23, 30, 31, 32, 33, 48} {
+				for shift := 8; shift <= 11; shift++ {
+					for _, lim := range [2][2]int{{0, pixMax}, {16 << (bpc - 8), 235 << (bpc - 8)}} {
+						ref := make([]uint16, 64)
+						got := make([]uint16, 64)
+						fgApplyRow(ref, 4, src, 2, scaling, grain, n, shift, lim[0], lim[1])
+						d.fgApplyRow(got, 4, src, 2, scaling, grain, n, shift, lim[0], lim[1])
+
+						for i := range ref {
+							if got[i] == ref[i] {
+								continue
+							}
+							t.Fatalf("bpc=%d n=%d shift=%d clip=%v: dst[%d] = %d, want %d",
+								bpc, n, shift, lim, i, got[i], ref[i])
+						}
+						cases++
+					}
+				}
+			}
+		}
+	}
+
+	t.Logf("%d cases", cases)
+}
+
+// TestFilmGrainUV16Asm checks the chroma noise row at high bit depth, over both
+// subsampling and both ways the scaling index is built.
+func TestFilmGrainUV16Asm(t *testing.T) {
+	d := newDsp[uint16]()
+	cases := 0
+
+	for _, bpc := range []int{10, 12} {
+		size := 1 << bpc
+		scaling := make([]uint8, size+4)[:size]
+		for i := range scaling {
+			scaling[i] = uint8(cdefGen(7, 3, i))
+		}
+		pixMax := int(1<<bpc - 1)
+
+		for iter := range 4 {
+			src := make([]uint16, 64)
+			luma := make([]uint16, 128)
+			for i := range src {
+				src[i] = uint16(int(cdefGen(iter, 0, i)) & pixMax)
+			}
+			for i := range luma {
+				luma[i] = uint16(int(cdefGen(iter, 4, i)) & pixMax)
+			}
+			grain := make([]int16, 64)
+			for i := range grain {
+				grain[i] = int16(cdefGen(iter, 1, i)&2047) - 1024
+			}
+
+			for _, n := range []int{16, 17, 23, 31, 32, 33} {
+				for _, sx := range []int{0, 1} {
+					for _, csfl := range []bool{false, true} {
+						for shift := 8; shift <= 11; shift++ {
+							ref := make([]uint16, 64)
+							got := make([]uint16, 64)
+							args := func(dst []uint16) {
+								fguvApplyRow(dst, 4, src, 2, luma, 3, scaling, grain,
+									n, shift, 16<<(bpc-8), 235<<(bpc-8), sx,
+									58, -68, 1<<(bpc-1), pixMax, csfl)
+							}
+							args(ref)
+							d.fguvApplyRow(got, 4, src, 2, luma, 3, scaling, grain,
+								n, shift, 16<<(bpc-8), 235<<(bpc-8), sx,
+								58, -68, 1<<(bpc-1), pixMax, csfl)
+
+							for i := range ref {
+								if got[i] == ref[i] {
+									continue
+								}
+								t.Fatalf("bpc=%d n=%d sx=%d csfl=%v shift=%d: dst[%d] = %d, want %d",
+									bpc, n, sx, csfl, shift, i, got[i], ref[i])
+							}
+							cases++
+						}
+					}
+				}
+			}
+		}
+	}
+
+	t.Logf("%d cases", cases)
+}
+
+// TestFilmGrainUVAsm checks the chroma noise row, whose scaling index comes
+// from the co-located luma, against the pure Go one.
+func TestFilmGrainUVAsm(t *testing.T) {
+	d := newDsp[uint8]()
+	scaling := make([]uint8, 256+4)[:256]
+	for i := range scaling {
+		scaling[i] = uint8(cdefGen(7, 3, i))
+	}
+
+	cases := 0
+
+	for iter := range 6 {
+		src := make([]uint8, 96)
+		luma := make([]uint8, 192)
+		for i := range src {
+			src[i] = uint8(cdefGen(iter, 0, i))
+		}
+		for i := range luma {
+			luma[i] = uint8(cdefGen(iter, 4, i))
+		}
+		grain := make([]int16, 96)
+		for i := range grain {
+			grain[i] = int16(cdefGen(iter, 1, i)&255) - 128
+		}
+
+		for _, n := range []int{8, 9, 15, 16, 19, 30, 32, 33} {
+			for _, sx := range []int{0, 1} {
+				for _, csfl := range []bool{false, true} {
+					for _, m := range [3][3]int{{64, 0, 0}, {-32, 96, 8}, {127, -128, -16}} {
+						ref := make([]uint8, 96)
+						got := make([]uint8, 96)
+						fguvApplyRow(ref, 4, src, 2, luma, 6, scaling, grain,
+							n, 9, 16, 235, sx, m[0], m[1], m[2], 255, csfl)
+						d.fguvApplyRow(got, 4, src, 2, luma, 6, scaling, grain,
+							n, 9, 16, 235, sx, m[0], m[1], m[2], 255, csfl)
+
+						for i := range ref {
+							if got[i] == ref[i] {
+								continue
+							}
+							t.Fatalf("n=%d sx=%d csfl=%v mults=%v: dst[%d] = %d, want %d",
+								n, sx, csfl, m, i, got[i], ref[i])
+						}
+						cases++
+					}
+				}
+			}
+		}
+	}
+
+	t.Logf("%d cases", cases)
+}
+
+func TestFilmGrain(t *testing.T) {
+	sc, closeFixture := openFixture(t, "filmgrain.txt")
+	defer closeFixture()
+
+	var cases int
+	var res fgResult
+	var bpc, layout int
+	var pl int
+
+	num := func(line int, s string) int {
+		v, err := strconv.Atoi(s)
+		if err != nil {
+			t.Fatalf("line %d: %v", line, err)
+		}
+
+		return v
+	}
+
+	cmp := func(line int, what string, got []int, want []string) {
+		if len(got) != len(want) {
+			t.Fatalf("line %d: %s has %d values, want %d", line, what, len(got), len(want))
+		}
+		for i, v := range got {
+			if v != num(line, want[i]) {
+				t.Fatalf("line %d: bpc=%d layout=%d %s[%d] = %d, want %s",
+					line, bpc, layout, what, i, v, want[i])
+			}
+		}
+	}
+
+	for line := 1; sc.Scan(); line++ {
+		fields := strings.Fields(sc.Text())
+		if len(fields) == 0 || fields[0] == "filmgrain" {
+			continue
+		}
+
+		switch fields[0] {
+		case "C":
+			iter := num(line, fields[1])
+			bpc = num(line, fields[2])
+			layout = num(line, fields[3])
+			w, h := num(line, fields[4]), num(line, fields[5])
+			isID := num(line, fields[6]) != 0
+			if bpc == 8 {
+				res = runFilmGrain[uint8](iter, bpc, layout, w, h, isID)
+			} else {
+				res = runFilmGrain[uint16](iter, bpc, layout, w, h, isID)
+			}
+			pl = 0
+			cases++
+
+		case "S":
+			got := make([]int, len(fields)-1)
+			for i := range got {
+				got[i] = int(res.scaling[pl][i])
+			}
+			cmp(line, "scaling", got, fields[1:])
+			pl++
+			if pl == 3 {
+				pl = 0
+			}
+
+		case "G":
+			got := make([]int, 0, grainHeight*grainWidth)
+			for y := range grainHeight {
+				for x := range grainWidth {
+					got = append(got, int(res.lut[pl][y][x]))
+				}
+			}
+			cmp(line, "grain_lut", got, fields[1:])
+			pl++
+			if pl == 3 {
+				pl = 0
+			}
+
+		case "P":
+			cmp(line, "plane", res.planes[pl], fields[1:])
+			pl++
+
+		default:
+			t.Fatalf("line %d: unknown record %q", line, fields[0])
+		}
+	}
+
+	if err := sc.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("%d cases", cases)
+}
+
+func BenchmarkGenerateGrain(b *testing.B) {
+	var data filmGrainData
+	data.seed = 0x1234
+	data.arCoeffShift = 8
+	data.grainScaleShift = 0
+	data.numYPoints = 8
+	for lag := range 4 {
+		data.arCoeffLag = lag
+		for i := range data.arCoeffsY {
+			data.arCoeffsY[i] = int8(i*7&63) - 32
+		}
+		for uv := range 2 {
+			for i := range data.arCoeffsUv[uv] {
+				data.arCoeffsUv[uv][i] = int8(i*5&63) - 32
+			}
+		}
+
+		b.Run("y-lag"+strconv.Itoa(lag), func(b *testing.B) {
+			var buf grainLut
+			for b.Loop() {
+				generateGrainY(&buf, &data, 8)
+			}
+		})
+		b.Run("uv-lag"+strconv.Itoa(lag), func(b *testing.B) {
+			var buf, bufY grainLut
+			for b.Loop() {
+				generateGrainUV(&buf, &bufY, &data, 0, 1, 1, 8)
+			}
+		})
+	}
+}
+
+// TestGrainARAsm checks the autoregressive row accumulator against the pure Go one.
+func TestGrainARAsm(t *testing.T) {
+	var buf grainLut
+	for y := range grainHeight {
+		for x := range grainWidth {
+			v := uint32(y*grainWidth+x)*2654435761 + 12345
+			v ^= v >> 13
+			buf[y][x] = int16(v) >> 4
+		}
+	}
+
+	var coeffs [24]int8
+	for i := range coeffs {
+		coeffs[i] = int8(i*11&127) - 64
+	}
+
+	cases := 0
+	for lag := 1; lag <= 3; lag++ {
+		for _, x1 := range []int{grainWidth - 3, 40, 12} {
+			for y := lag; y < grainHeight; y++ {
+				got := make([]int32, grainWidth)
+				want := make([]int32, grainWidth)
+				for i := range got {
+					got[i], want[i] = -7, -7
+				}
+				grainAR(got, &buf, y, lag, coeffs[:], 3, x1)
+				grainARGo(want, &buf, y, lag, coeffs[:], 3, x1)
+				for i := range want {
+					if got[i] != want[i] {
+						t.Fatalf("lag=%d y=%d x1=%d: pre[%d] = %d, want %d",
+							lag, y, x1, i, got[i], want[i])
+					}
+				}
+				cases++
+			}
+		}
+	}
+
+	t.Logf("%d cases", cases)
+}
