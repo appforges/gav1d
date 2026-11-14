@@ -3,7 +3,7 @@ package avif
 import (
 	"encoding/binary"
 
-	"github.com/gen2brain/gav1d/av1"
+	"github.com/appforges/gav1d/av1"
 )
 
 type rowConsts struct {

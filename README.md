@@ -1,6 +1,6 @@
 ## gav1d
-[![Status](https://github.com/gen2brain/gav1d/actions/workflows/test.yml/badge.svg)](https://github.com/gen2brain/gav1d/actions)
-[![Go Reference](https://pkg.go.dev/badge/github.com/gen2brain/gav1d.svg)](https://pkg.go.dev/github.com/gen2brain/gav1d)
+[![Status](https://github.com/appforges/gav1d/actions/workflows/test.yml/badge.svg)](https://github.com/appforges/gav1d/actions)
+[![Go Reference](https://pkg.go.dev/badge/github.com/appforges/gav1d.svg)](https://pkg.go.dev/github.com/appforges/gav1d)
 
 [AV1](https://en.wikipedia.org/wiki/AV1) video and [AVIF](https://en.wikipedia.org/wiki/AVIF) image decoder and encoder in pure Go.
 

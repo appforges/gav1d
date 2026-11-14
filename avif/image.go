@@ -5,7 +5,7 @@ import (
 	"image"
 	"image/color"
 
-	"github.com/gen2brain/gav1d/av1"
+	"github.com/appforges/gav1d/av1"
 )
 
 // ErrUnsupported is returned for a file this package cannot render but which
@@ -98,12 +98,17 @@ func toImage(f *file, it *item, pic, alpha *av1.Picture, ycbcr bool) (image.Imag
 		}
 	}
 
+	return pictureToImage(pic, alpha, f.colorInfo(it, pic))
+}
+
+// pictureToImage is the shared existing RGB implementation for both entry points.
+func pictureToImage(pic, alpha *av1.Picture, ci ColorInfo) (image.Image, error) {
 	outDepth := 8
 	if pic.BitDepth > 8 {
 		outDepth = 16
 	}
 
-	cs := newColorState(pic, f.colorInfo(it, pic), outDepth)
+	cs := newColorState(pic, ci, outDepth)
 	if cs.unsupportedSpace {
 		return nil, ErrUnsupported
 	}

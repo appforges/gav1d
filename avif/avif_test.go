@@ -22,7 +22,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gen2brain/gav1d/av1"
+	"github.com/appforges/gav1d/av1"
 )
 
 // avifdec is libavif's decoder, which the cross-checks compare against. It is

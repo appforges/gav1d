@@ -154,6 +154,9 @@ func setupFrame[P pixel, C coef](d *Decoder, tiles []tileGroup, p *pendingFrame)
 		reconIntra: reconBIntra[P, C],
 		reconInter: reconBInter[P, C],
 	}
+	if d.DisableScratchPooling {
+		f.tc, f.fb = nil, nil
+	}
 	f.bitdepthMax = int32(1<<f.bpc - 1)
 	f.ssHor = b2i(f.layout != pixelLayoutI444)
 	f.ssVer = b2i(f.layout == pixelLayoutI420)
@@ -205,8 +208,11 @@ func setupFrame[P pixel, C coef](d *Decoder, tiles []tileGroup, p *pendingFrame)
 	f.setupRefmvs(d, seqHdr)
 	f.setupJntWeights()
 
-	b, ok := d.fb.Get().(*frameBufs[P])
-	if !ok {
+	var b *frameBufs[P]
+	if f.fb != nil {
+		b, _ = f.fb.Get().(*frameBufs[P])
+	}
+	if b == nil {
 		b = &frameBufs[P]{}
 	}
 	f.bufs = b
@@ -532,7 +538,9 @@ func (f *frameContext[P, C]) releasePlanes() {
 	}
 
 	if f.bufs != nil {
-		f.fb.Put(f.bufs)
+		if f.fb != nil {
+			f.fb.Put(f.bufs)
+		}
 		f.bufs = nil
 	}
 }
@@ -903,9 +911,10 @@ func (s *sbrowSync) wait(sby, nCols int) bool {
 // over from the last frame.
 func (f *frameContext[P, C]) newTaskContext() *taskContext[P, C] {
 	t := &taskContext[P, C]{f: f}
-	if s, ok := f.tc.Get().(*scratch[P]); ok {
-		t.scratch = s
-	} else {
+	if f.tc != nil {
+		t.scratch, _ = f.tc.Get().(*scratch[P])
+	}
+	if t.scratch == nil {
 		t.scratch = &scratch[P]{}
 	}
 	t.cf = make([]C, 32*32)
@@ -914,7 +923,9 @@ func (f *frameContext[P, C]) newTaskContext() *taskContext[P, C] {
 }
 
 func (f *frameContext[P, C]) putTaskContext(t *taskContext[P, C]) {
-	f.tc.Put(t.scratch)
+	if f.tc != nil {
+		f.tc.Put(t.scratch)
+	}
 	t.scratch = nil
 }
 

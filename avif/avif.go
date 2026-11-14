@@ -82,7 +82,7 @@ its own.
 
 # The bitstream
 
-The [github.com/gen2brain/gav1d/av1] package decodes AV1 on its own, which is
+The [github.com/appforges/gav1d/av1] package decodes AV1 on its own, which is
 what to reach for to decode video rather than images.
 */
 package avif
@@ -94,7 +94,7 @@ import (
 	"math"
 	"slices"
 
-	"github.com/gen2brain/gav1d/av1"
+	"github.com/appforges/gav1d/av1"
 )
 
 const alphaURN = "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha"

@@ -5,7 +5,7 @@ import (
 	"image/color"
 	"io"
 
-	"github.com/gen2brain/gav1d/av1"
+	"github.com/appforges/gav1d/av1"
 )
 
 // DefaultQuality is used when EncodeOptions.Quality is zero.

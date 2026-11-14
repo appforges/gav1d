@@ -203,6 +203,12 @@ type Decoder struct {
 	// applied to output only, so later frames decode the same either way.
 	SkipFilmGrain bool
 
+	// DisableScratchPooling prevents tile scratch and frame buffers from being
+	// obtained from or returned to this decoder's sync.Pools. Set before use.
+	// False preserves the upstream reuse behavior. This does not disable the
+	// picture pool, force GC, bound RSS, or make decoding cancellable.
+	DisableScratchPooling bool
+
 	seqHdr   *sequenceHeader
 	frameHdr *frameHeader
 	refs     [numRefFrames]refState
