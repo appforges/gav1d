@@ -1,0 +1,37 @@
+{
+  "task": "V05T / APP-2719",
+  "source_manifest": "~/workspace/appforges/boundlet/tools/avif-admission/testdata/geometry/manifest.json",
+  "AVIFSHA256": "b5e8c522f217ef491522e7d031ffa19d70449abe19ecc96aa40c131d182d49cd",
+  "ReferenceSHA256": "a79f1ed38d0c94f3b503a42231e503ee927ac5fc22829393d3bd59f5163ce675",
+  "EncoderVersion": "Version: 1.4.2 (dav1d [dec]:1.5.4, aom [enc/dec]:3.14.1)\nlibyuv : unavailable\n\n",
+  "DecoderVersion": "Version: 1.4.2 (dav1d [dec]:1.5.4, aom [enc/dec]:3.14.1)\nlibyuv : unavailable\n\n",
+  "EncoderSHA256": "f9cd38ec2804b56174344fd178ea919f9bff41ec7fc4a471f0ff9065b1b5d076",
+  "DecoderSHA256": "635e3acc8cc93212ca5cf1cc867b9bb6f3b738574e92107ed24be48a4a75e6bd",
+  "GeneratorSHA256": "c8d2772053639f3a880aff9f8cd6af78cec44995c445c77235349d354cda69f0",
+  "width": 255,
+  "height": 255,
+  "range": "limited",
+  "subsampling": "420",
+  "reference_policy": "8-bit CICP 1/13/6; explicit full/limited range, bilinear chroma upsampling matching the audited candidate implementation, native libaom decoder; nearest controls retained for 420; RGB references are decoded from the actual AVIF, not the source PNG",
+  "old_witness": {
+    "x": 49,
+    "y": 236,
+    "old_rgba": [
+      49,
+      236,
+      144,
+      255
+    ],
+    "reference_rgba": [
+      50,
+      236,
+      144,
+      255
+    ],
+    "differing_pixels": 1,
+    "max_8bit_channel_difference": 1
+  },
+  "independent_libaom_planes_match": true,
+  "dav1d_rgb_matches_libaom_rgb": true,
+  "reference_source": "https://github.com/AOMediaCodec/libavif/blob/v1.4.2/src/reformat.c#L808-L887"
+}

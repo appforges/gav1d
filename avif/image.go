@@ -103,6 +103,12 @@ func toImage(f *file, it *item, pic, alpha *av1.Picture, ycbcr bool) (image.Imag
 
 // pictureToImage is the shared existing RGB implementation for both entry points.
 func pictureToImage(pic, alpha *av1.Picture, ci ColorInfo) (image.Image, error) {
+	return pictureToImagePolicy(pic, alpha, ci, false)
+}
+
+// referenceRounding is restricted to the explicitly checked Boundlet picture
+// entry. Ordinary Decode keeps the original upstream arithmetic and dispatch.
+func pictureToImagePolicy(pic, alpha *av1.Picture, ci ColorInfo, referenceRounding bool) (image.Image, error) {
 	outDepth := 8
 	if pic.BitDepth > 8 {
 		outDepth = 16
@@ -129,6 +135,12 @@ func pictureToImage(pic, alpha *av1.Picture, ci ColorInfo) (image.Image, error) 
 		cs.consts = cs.rowConsts()
 		if outDepth == 8 {
 			cs.row = rowFn(cs.ssHor)
+			if referenceRounding {
+				cs.row = convertRowReference420
+				if cs.ssHor == 0 {
+					cs.row = convertRowReference444
+				}
+			}
 		} else {
 			cs.row16 = rowFn16(cs.ssHor)
 		}

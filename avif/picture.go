@@ -7,7 +7,8 @@ import (
 )
 
 // PictureToNRGBA synchronously converts a live decoder Picture to an independently
-// owned opaque NRGBA, using the existing bilinear matrix/range implementation.
+// owned opaque NRGBA, using bilinear chroma and the reviewed reference's explicit
+// multiply-add rounding. Ordinary Decode retains upstream arithmetic.
 // pic is required, borrowed read-only, and must remain live throughout the call.
 // The caller owns its lifetime: this function does not decode, retain, Release,
 // or Flush it. Do not pass fabricated pictures or race the call with Release.
@@ -41,10 +42,10 @@ func PictureToNRGBA(pic *av1.Picture) (*image.NRGBA, error) {
 			return nil, ErrInvalid
 		}
 	}
-	img, err := pictureToImage(pic, nil, ColorInfo{
+	img, err := pictureToImagePolicy(pic, nil, ColorInfo{
 		Primaries: uint16(pic.ColorPrimaries), Transfer: uint16(pic.Transfer),
 		Matrix: uint16(pic.MatrixCoeffs), FullRange: pic.FullRange,
-	})
+	}, true)
 	if err != nil {
 		return nil, err
 	}
