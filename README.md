@@ -1,4 +1,11 @@
 ## gav1d
+
+This public fork of gen2brain/gav1d v0.2.7 maintains the minimal Boundlet patches
+documented in [PATCHES.md](PATCHES.md). Consumers use tagged Go modules from
+`github.com/appforges/gav1d`; no local checkout, `replace`, or `go.work` is required.
+Boundlet currently uses `v0.2.7-boundlet.2`; publishing the separate 10-bit API
+does not upgrade or enable it in Boundlet. GitHub Actions remain disabled.
+
 [![Status](https://github.com/appforges/gav1d/actions/workflows/test.yml/badge.svg)](https://github.com/appforges/gav1d/actions)
 [![Go Reference](https://pkg.go.dev/badge/github.com/appforges/gav1d.svg)](https://pkg.go.dev/github.com/appforges/gav1d)
 

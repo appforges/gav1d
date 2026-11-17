@@ -1,4 +1,6 @@
-# 私有 gav1d 最小补丁镜像
+# gav1d 最小补丁镜像
+
+- 2026-11-17 用户授权公开 appforges/gav1d，消费者按固定 Go 模块版本下载，不依赖本地 checkout/replace/go.work。此前“私有”描述为历史，后续发布仍仅针对 appforges/gav1d 的补丁预发布，不向上游发布；SDK 不自动升级或启用 10 位。可按需重新克隆维护。
 
 - 上游固定 gen2brain/gav1d v0.2.7，提交 0d06c9dc16a45726fec53e2f5f63cf1ce61d6da9；保留 COPYING、PATENTS 和历史。
 - 只维护 PictureToNRGBA 共享颜色入口、局部 DisableScratchPooling 与机械模块路径调整。不要重写 codec 或改默认行为。
