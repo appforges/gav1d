@@ -1,0 +1,12 @@
+{
+  "source_tag": "github.com/appforges/boundlet v0.1.114",
+  "source": "V05X native references; copied unchanged, not regenerated",
+  "files": {
+    "original-yuv420-10.avif": "193f1791a949ef9795f7b849a2d05ec3b495e64b0cd3f133a85bc8a608c02067",
+    "original-yuv420-10-bilinear.png": "dc900fba78f4dcec6b46b31848eb18b9cffbbef421ec38e28ddad348527971ad",
+    "original-yuv420-10.y4m": "0b3461ba2cc72c404dc685f8a4ce75d93d920aae2e9cc7d6ae9e98d9cfade7e0",
+    "original-yuv444-10.avif": "df6b8552434442396679c426a56140f0ac564e3b8257a246dac3906294720c11",
+    "original-yuv444-10-bilinear.png": "4fb2e34d664736e121f30fa83b99fe8f23716f2c74a8f1143640f10ab9a300c6",
+    "original-yuv444-10.y4m": "8fd9bd8bae4ad4440818989da0e57d864c757cb69927a9befce1ac0cc13e4a0c"
+  }
+}

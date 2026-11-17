@@ -1,0 +1,230 @@
+// tenbitrefgen only creates independent native reference data for trusted
+// developers. It imports no candidate decoder/converter and is never an SDK tool.
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"image"
+	"image/color"
+	"image/png"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"time"
+)
+
+const (
+	encoderSHA     = "f9cd38ec2804b56174344fd178ea919f9bff41ec7fc4a471f0ff9065b1b5d076" // Reviewed libavif1.4.2/libaom3.14.1/no-libyuv reference encoder.
+	decoderSHA     = "635e3acc8cc93212ca5cf1cc867b9bb6f3b738574e92107ed24be48a4a75e6bd" // Same independently reviewed native decoder as V05X.
+	channelMax     = 65535                                                              // PNG source samples use all sixteen bits, never an eight-bit replicated source.
+	commandTimeout = 30 * time.Second                                                   // Per trusted native fixture command; not a decoder/SDK deadline contract.
+)
+
+type entry struct {
+	Name, Range, Chroma                                     string
+	Width, Height                                           int
+	SourcePNG, AVIF, ReferencePNG, ReferenceY4M, NearestPNG string
+	EncodeArgs, DecodeArgs, PlaneArgs, NearestArgs          []string
+}
+type command struct {
+	Tool   string
+	Args   []string
+	Output string
+	Error  string
+}
+type manifest struct {
+	Version                                                     int
+	Go, OS, Arch, GeneratorSHA256, EncoderSHA256, DecoderSHA256 string
+	NativeLibraryPins                                           map[string]string
+	Files                                                       map[string]string
+	Cases                                                       []entry
+	Commands                                                    []command
+}
+
+func digest(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
+func pattern(width, height int) *image.NRGBA64 {
+	m := image.NewNRGBA64(image.Rect(0, 0, width, height))
+	bars := []color.NRGBA64{{0, 0, 0, channelMax}, {channelMax, channelMax, channelMax, channelMax}, {32768, 32768, 32768, channelMax}, {channelMax, 0, 0, channelMax}, {0, channelMax, 0, channelMax}, {0, 0, channelMax, channelMax}, {channelMax, channelMax, 0, channelMax}, {channelMax, 0, channelMax, channelMax}}
+	for y := range height {
+		for x := range width {
+			// Incommensurate integer ramps exercise low bits and wrap points;
+			// top-half color bars additionally exercise clipping/saturation.
+			c := color.NRGBA64{uint16((x*257 + y*131 + x*y*7 + 37) & channelMax), uint16((x*811 + y*619 + x*y*11 + 109) & channelMax), uint16((x*383 + y*997 + x*y*17 + 53) & channelMax), channelMax}
+			if width >= len(bars) && y < height/2 {
+				c = bars[x*len(bars)/width]
+			}
+			m.SetNRGBA64(x, y, c)
+		}
+	}
+	return m
+}
+func generate(out string) error {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		return errors.New("native reference toolchain pin is darwin/arm64")
+	}
+	enc, e := exec.LookPath("avifenc")
+	if e != nil {
+		return e
+	}
+	dec, e := exec.LookPath("avifdec")
+	if e != nil {
+		return e
+	}
+	for path, want := range map[string]string{enc: encoderSHA, dec: decoderSHA} {
+		b, e := os.ReadFile(path)
+		if e != nil {
+			return e
+		}
+		if digest(b) != want {
+			return fmt.Errorf("reference executable changed: %s", path)
+		}
+	}
+	pinBytes, e := os.ReadFile("tenbitprobe/testdata/reference-manifest.json")
+	if e != nil {
+		return e
+	}
+	var old struct {
+		Libraries map[string]string `json:"native_library_pins"`
+	}
+	if e = json.Unmarshal(pinBytes, &old); e != nil {
+		return e
+	}
+	if len(old.Libraries) != 5 {
+		return errors.New("incomplete V05X native library pins")
+	}
+	for path, want := range old.Libraries {
+		b, e := os.ReadFile(path)
+		if e != nil {
+			return e
+		}
+		if digest(b) != want {
+			return fmt.Errorf("reference library changed: %s", path)
+		}
+	}
+	if _, e = os.Stat(out); !os.IsNotExist(e) {
+		return errors.New("choose a new output directory; never overwrite references")
+	}
+	if e = os.MkdirAll(out, 0o700); e != nil {
+		return e
+	}
+	source, e := os.ReadFile("tenbitrefgen/main.go")
+	if e != nil {
+		return e
+	}
+	m := manifest{Version: 1, Go: runtime.Version(), OS: runtime.GOOS, Arch: runtime.GOARCH, GeneratorSHA256: digest(source), EncoderSHA256: encoderSHA, DecoderSHA256: decoderSHA, NativeLibraryPins: old.Libraries, Files: map[string]string{}}
+	save := func(name string, b []byte) error {
+		if e := os.WriteFile(filepath.Join(out, name), b, 0o600); e != nil {
+			return e
+		}
+		m.Files[name] = digest(b)
+		return nil
+	}
+	run := func(tool string, args []string) error {
+		actualArgs := append([]string(nil), args...)
+		for i, a := range actualArgs {
+			if filepath.Ext(a) == ".png" || filepath.Ext(a) == ".avif" || filepath.Ext(a) == ".y4m" {
+				actualArgs[i] = filepath.Join(out, a)
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, tool, actualArgs...)
+		cmd.Env = []string{"PATH=/usr/bin:/bin:/opt/homebrew/bin", "LC_ALL=C"}
+		b, e := cmd.CombinedOutput()
+		c := command{Tool: filepath.Base(tool), Args: args, Output: strings.ReplaceAll(string(b), filepath.Clean(out), ".")}
+		if e != nil {
+			c.Error = e.Error()
+		}
+		m.Commands = append(m.Commands, c)
+		if e != nil {
+			raw, _ := json.MarshalIndent(m, "", "  ")
+			_ = os.WriteFile(filepath.Join(out, "failed-manifest.json"), raw, 0o600)
+			return fmt.Errorf("native reference: %w: %s", e, b)
+		}
+		if len(args) > 1 {
+			last := args[len(args)-1]
+			if filepath.Ext(last) == ".png" || filepath.Ext(last) == ".avif" || filepath.Ext(last) == ".y4m" {
+				data, e := os.ReadFile(filepath.Join(out, last))
+				if e != nil {
+					return e
+				}
+				m.Files[last] = digest(data)
+			}
+		}
+		return nil
+	}
+	if e = run(enc, []string{"--version"}); e != nil {
+		return e
+	}
+	if e = run(dec, []string{"--version"}); e != nil {
+		return e
+	}
+	// The eight geometries cover one-pixel axes, odd/even dimensions, thin and
+	// rectangular pictures and the proposed 256-side/65536-pixel boundary.
+	for _, dim := range [][2]int{{1, 1}, {1, 3}, {3, 1}, {17, 15}, {16, 16}, {255, 255}, {256, 255}, {256, 256}} {
+		width, height := dim[0], dim[1]
+		src := fmt.Sprintf("source-%dx%d.png", width, height)
+		var buf bytes.Buffer
+		if e = png.Encode(&buf, pattern(width, height)); e != nil {
+			return e
+		}
+		if e = save(src, buf.Bytes()); e != nil {
+			return e
+		}
+		for _, rng := range []string{"full", "limited"} {
+			for _, chroma := range []string{"420", "444"} {
+				name := fmt.Sprintf("rgb16-%dx%d-%s-%s", width, height, rng, chroma)
+				v := entry{Name: name, Range: rng, Chroma: chroma, Width: width, Height: height, SourcePNG: src, AVIF: name + ".avif", ReferencePNG: name + "-reference.png", ReferenceY4M: name + ".y4m"}
+				v.EncodeArgs = []string{"--codec", "aom", "--jobs", "1", "--depth", "10", "--yuv", chroma, "--range", rng, "--cicp", "1/13/6", "--qcolor", "100", "--speed", "6", src, v.AVIF}
+				v.DecodeArgs = []string{"--codec", "aom", "--jobs", "1", "--depth", "16", "--upsampling", "bilinear", "--size-limit", "65536", "--dimension-limit", "256", v.AVIF, v.ReferencePNG}
+				v.PlaneArgs = []string{"--codec", "aom", "--jobs", "1", "--size-limit", "65536", "--dimension-limit", "256", v.AVIF, v.ReferenceY4M}
+				if e = run(enc, v.EncodeArgs); e != nil {
+					return e
+				}
+				if e = run(dec, v.DecodeArgs); e != nil {
+					return e
+				}
+				if e = run(dec, v.PlaneArgs); e != nil {
+					return e
+				}
+				if chroma == "420" {
+					v.NearestPNG = name + "-nearest.png"
+					v.NearestArgs = append([]string(nil), v.DecodeArgs...)
+					v.NearestArgs[7] = "nearest"
+					v.NearestArgs[len(v.NearestArgs)-1] = v.NearestPNG
+					if e = run(dec, v.NearestArgs); e != nil {
+						return e
+					}
+				}
+				m.Cases = append(m.Cases, v)
+			}
+		}
+	}
+	b, e := json.MarshalIndent(m, "", "  ")
+	if e != nil {
+		return e
+	}
+	return os.WriteFile(filepath.Join(out, "manifest.json"), append(b, '\n'), 0o600)
+}
+func main() {
+	out := flag.String("out", "", "new private directory for independent ten-bit reference corpus; required")
+	flag.Parse()
+	if *out == "" {
+		fmt.Fprintln(os.Stderr, "-out is required")
+		os.Exit(2)
+	}
+	if e := generate(*out); e != nil {
+		fmt.Fprintln(os.Stderr, e)
+		os.Exit(1)
+	}
+	fmt.Println("Independent 10-bit source/AVIF/YUV/RGB16 corpus created; no candidate was imported or run.")
+}

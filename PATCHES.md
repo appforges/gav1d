@@ -10,6 +10,17 @@
 2. 从 toImage 抽取共享 pictureToImage；公开 PictureToNRGBA 只接受真实、仍存活的 8-bit I420/I444、CICP 1/13/6 Picture。参数只读借用，返回不别名输入的 opaque NRGBA；不解码、不应用容器变换或 ICC、不 Release/Flush。v0.2.7-boundlet.1 保持原RGB算法；v0.2.7-boundlet.2 的 V05T 修正仅该显式入口的 R/B 乘加舍入，普通 Decode 的原默认算法和 SIMD 不变。
 3. Decoder.DisableScratchPooling 显式 true 时 frameContext 不取得 tc/fb pool 引用，不 Get/Put 缓存；false 保持原行为。picture pool 不在本选项范围，仍须调用者按生命周期排空、释放并丢弃 decoder。
 4. 测试与本地双 Go 脚本；GitHub Actions 暂停，保留原工作流。
+5. V05Y/APP-2749增加显式PictureToNRGBA64窄入口与专用纯Go RGB16算术，原默认Decode、8位PictureToNRGBA及SIMD保持不变。仅10位I420/I444、CICP1/13/6、full/limited；先按既有方案补独立native参考及逐样本验证。只读借用live Picture、检查实际字节stride/长度与样本范围，返回独占opaque NRGBA64；不解码/释放/保留Picture，不处理源容器/ICC/变换或替代SDK授权和资源准入。
+
+### V05Y 专用 RGB16 入口（2026-11-16）
+
+新增 PictureToNRGBA64(*av1.Picture) (*image.NRGBA64,error)。仅10位I420/I444、CICP1/13/6、full/limited；显式float32系数/归一化与binary64 FMA再转float32，包含绿色乘加、邻列先乘再融合near/邻行/对角的bilinear顺序及RGB16最终取整。先检查尺寸乘法、每样本两字节、偶数字节stride/最后有效行长度及所有有效样本0..1023，再分配输出；不把padding当样本。nil/坏输入返回ErrInvalid，其他位深/色度/色彩返回ErrUnsupported，无部分图；输出不别名源或其他调用，源必须只读保持live至返回。
+
+不改image.go、color.go、color_row.go、color_reference.go、picture.go、AV1解码器或旧默认/SIMD。函数不解码、不读写文件、不Release/Flush、不保留Picture、不处理容器/ICC/alpha/变换，也不提供SDK授权或像素/CPU/RSS额度。SDK生产依赖仍为.2，不因本私有模块增加API就启用10位。
+
+先生成独立native参考再写入口：libavif1.4.2/libaom3.14.1/no-libyuv，固定CLI及实际动态库SHA；8种几何×2range×2chroma共32组，原件/Y4M/PNG16与nearest控制120文件，两次生成摘要全部一致；source/generator/参数/原始输出在testdata/boundlet/v05y，生成器不导入candidate。另保留V05X原两图/参考不重生成。新入口34组的2471508个RGB16通道、1854444个有效YUV样本逐样本精确；低位负向、源不变、独占/释放后存活、并发只读及坏plane/stride/样本/维度溢出验证通过。双Go1.27.3/1.26.10全库race/vet/build与noasm通过；普通Decode在原两图仍19/10通道差1。
+
+这只是私有颜色入口的已验样本，不是通用AVIF生产准入或所有native构建/架构的等价证明。6份新增I444压缩原件超过未来转换器64KiB上限（最大88448B），它们可验证颜色函数但不能作为未来转换器已准入；完整参考PNG最大183164B。旧.2快照与本实现用同一固定aom/1线程/--no-strict对照，双Go仍恰有相同五个普通TestColor失败，日志保留在Boundlet的V05Y证据，不冒全原生suite通过。下一步独立消费者固定私有.3验证实际公开API，SDK与转换器接线后置。
 
 ### V05T 舍入差异复核（2026-11-16）
 
